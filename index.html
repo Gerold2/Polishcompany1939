@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Польская кампания 1939 — запись на роли</title>
+<style>
+:root{--bg:#e9e6dc;--card:#f5f2e8;--ink:#23261f;--mute:#5d6252;--line:#c4bfa9;--acc:#4a5a3a;--accink:#fff;--free:#d9e0c8;--busy:#e6d9d0}
+@media (prefers-color-scheme:dark){:root{--bg:#171a14;--card:#22261d;--ink:#e8e6da;--mute:#a4a994;--line:#3a4030;--acc:#8fa56f;--accink:#12150e;--free:#2c3322;--busy:#3a2e27;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 Georgia,"Times New Roman",serif}
+main{max-width:760px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:1.6rem;margin:0 0 4px}
+.sub{color:var(--mute);margin:0 0 18px}
+.me,.role{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px}
+label{display:block;font-weight:bold;margin-bottom:6px}
+input{width:100%;font:inherit;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+.hint{color:var(--mute);font-size:.88rem;margin-top:6px}
+.msg{min-height:1.4em;margin-top:8px;font-size:.92rem;color:var(--acc)}
+.role h2{font-size:1.05rem;margin:0 0 8px;display:flex;justify-content:space-between}
+.role h2 span{color:var(--mute);font-weight:normal;font-size:.9rem}
+.slot{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border-radius:8px;margin-top:6px;background:var(--free)}
+.slot.busy{background:var(--busy)}
+.slot b{overflow-wrap:anywhere}
+button{font:inherit;padding:7px 12px;border-radius:8px;border:1px solid var(--acc);background:var(--acc);color:var(--accink);cursor:pointer;white-space:nowrap}
+button.ghost{background:transparent;color:var(--ink);border-color:var(--line)}
+button:disabled{opacity:.45;cursor:default}
+.gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin:0 0 18px}
+.gallery img{width:100%;border-radius:8px;border:1px solid var(--line);display:block}
+</style>
+</head>
+<body>
+<main>
+  <h1>Польская кампания 1939</h1>
+  <p class="sub">Запись на роли · Arma 3 · германская сторона (СС) · всего 14 мест</p>
+
+  <!-- Свои фото: положи файлы в папку photos/ рядом с index.html. Если файла нет, картинка скрывается. -->
+  <div class="gallery">
+    <img src="photos/1.jpg" alt="Фото кампании 1939" onerror="this.remove()">
+    <img src="photos/2.jpg" alt="Фото кампании 1939" onerror="this.remove()">
+  </div>
+
+  <div class="me">
+    <label for="cs">Твой позывной</label>
+    <input id="cs" maxlength="24" autocomplete="off" placeholder="Например: Волк">
+    <div class="hint">Настоящее имя не нужно. Освободить место может только тот браузер, с которого его заняли.</div>
+    <div class="msg" id="msg"></div>
+  </div>
+  <div id="roles"></div>
+</main>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, collection, doc, onSnapshot, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+// ВСТАВЬ СЮДА СВОЙ КОНФИГ из Firebase Console (Project settings → Your apps → Web app)
+const firebaseConfig = {
+  apiKey: "ВСТАВЬ",
+  authDomain: "ВСТАВЬ",
+  projectId: "ВСТАВЬ",
+  appId: "ВСТАВЬ"
+};
+
+const ROLES = [["officer","Офицер",1],["nco","Унтер-офицеры",2],["mg","Пулемётчики",2],["pvt","Рядовые",5],["medic","Санитары",2],["ammo","Подносчики боеприпасов",2]];
+const csEl = document.getElementById("cs"), msgEl = document.getElementById("msg");
+let taken = {}, uid = null, ready = false;
+const say = t => msgEl.textContent = t;
+const key = s => "c_" + encodeURIComponent(s.trim().toLowerCase());
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+function render() {
+  const host = document.getElementById("roles"); host.textContent = "";
+  for (const [rk, name, cnt] of ROLES) {
+    const box = document.createElement("div"); box.className = "role";
+    let n = 0; for (let i = 1; i <= cnt; i++) if (taken[rk + "-" + i]) n++;
+    const h = document.createElement("h2"); h.textContent = name;
+    const c = document.createElement("span"); c.textContent = n + " / " + cnt; h.appendChild(c); box.appendChild(h);
+    for (let i = 1; i <= cnt; i++) {
+      const id = rk + "-" + i, s = taken[id];
+      const row = document.createElement("div"); row.className = "slot" + (s ? " busy" : "");
+      const l = document.createElement("b"); l.textContent = s ? s.callsign : "свободно"; row.appendChild(l);
+      const b = document.createElement("button");
+      if (s) {
+        b.textContent = "Освободить"; b.className = "ghost";
+        b.disabled = !ready || s.uid !== uid;
+        b.onclick = () => release(id, s.callsign);
+      } else {
+        b.textContent = "Занять"; b.disabled = !ready;
+        b.onclick = () => claim(id);
+      }
+      row.appendChild(b); box.appendChild(row);
+    }
+    host.appendChild(box);
+  }
+}
+
+async function claim(id) {
+  const cs = csEl.value.trim();
+  if (!cs) { say("Сначала введи позывной."); csEl.focus(); return; }
+  const slotRef = doc(db, "slots", id), csRef = doc(db, "callsigns", key(cs));
+  try {
+    await runTransaction(db, async tx => {
+      const [s, c] = await Promise.all([tx.get(slotRef), tx.get(csRef)]);
+      if (s.exists()) throw new Error("slot");
+      if (c.exists()) throw new Error("name");
+      tx.set(slotRef, { callsign: cs, uid });
+      tx.set(csRef, { slot: id, uid });
+    });
+    say("Готово: «" + cs + "» записан.");
+  } catch (e) {
+    if (e.message === "slot") say("Это место только что заняли.");
+    else if (e.message === "name") say("Этот позывной уже занял место.");
+    else say("Не удалось записаться. Попробуй ещё раз.");
+  }
+}
+
+async function release(id, callsign) {
+  try {
+    await runTransaction(db, async tx => {
+      tx.delete(doc(db, "slots", id));
+      tx.delete(doc(db, "callsigns", key(callsign)));
+    });
+    say("Место освобождено.");
+  } catch (e) { say("Не удалось освободить место."); }
+}
+
+render();
+signInAnonymously(auth).then(cred => { uid = cred.user.uid; ready = true; render(); })
+  .catch(() => say("Не удалось подключиться к базе. Проверь настройки Firebase."));
+
+onSnapshot(collection(db, "slots"), snap => {
+  const t = {}; snap.forEach(d => { const x = d.data(); t[d.id] = { callsign: String(x.callsign || ""), uid: x.uid }; });
+  taken = t; render();
+}, () => say("Нет доступа к базе. Проверь правила Firestore."));
+</script>
+</body>
+</html>
